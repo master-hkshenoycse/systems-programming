@@ -41,8 +41,8 @@ char **tokenize(char *line)
 
 
 int main(int argc, char* argv[]) {
-	char  line[MAX_INPUT_SIZE]; 
-	char cwd[256];           
+	char  line[MAX_INPUT_SIZE];
+	char cwd[256];
 	char  **tokens;              
 	int i;
 
@@ -70,6 +70,29 @@ int main(int argc, char* argv[]) {
             free(tokens);
             continue;
         }
+
+		/* ---------------- BUILT-IN: cd ---------------- */
+		if (strcmp(tokens[0], "cd") == 0)
+		{
+			/* cd requires exactly one argument */
+			if (tokens[1] == NULL || tokens[2] != NULL)
+			{
+				printf("cd: invalid usage\n");
+			}
+			else
+			{
+				if (chdir(tokens[1]) != 0)
+				{
+					perror("cd failed");
+				}
+			}
+
+			for (i = 0; tokens[i] != NULL; i++)
+				free(tokens[i]);
+
+			free(tokens);
+			continue;
+		}
 		
 		pid_t pid = fork();
 
