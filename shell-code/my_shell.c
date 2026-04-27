@@ -1,5 +1,6 @@
-#include  <stdio.h>
-#include  <sys/types.h>
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -40,7 +41,8 @@ char **tokenize(char *line)
 
 
 int main(int argc, char* argv[]) {
-	char  line[MAX_INPUT_SIZE];            
+	char  line[MAX_INPUT_SIZE]; 
+	char cwd[256];           
 	char  **tokens;              
 	int i;
 
@@ -48,7 +50,12 @@ int main(int argc, char* argv[]) {
 	while(1) {			
 		/* BEGIN: TAKING INPUT */
 		bzero(line, sizeof(line));
-		printf("$ ");
+
+		if (getcwd(cwd, sizeof(cwd)) != NULL)
+			printf("%s $ ", cwd);
+		else
+			printf("$ ");
+
 		scanf("%[^\n]", line);
 		getchar();
 
