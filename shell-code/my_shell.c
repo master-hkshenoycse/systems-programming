@@ -8,6 +8,7 @@
 #define MAX_INPUT_SIZE 1024
 #define MAX_TOKEN_SIZE 64
 #define MAX_NUM_TOKENS 64
+#define MAX_BG_PROCS 64
 
 /* Splits the string by space and returns the array of tokens
 *
@@ -43,23 +44,30 @@ char **tokenize(char *line)
 int main(int argc, char* argv[]) {
 	char  line[MAX_INPUT_SIZE];
 	char cwd[256];
+	pid_t bg_pids[MAX_BG_PROCS];
+    int bg_count = 0;
 	char  **tokens;              
 	int i;
 
 
 	while(1) {			
-		pid_t bg_pid;
-		int bg_status;
+		int status;
+        pid_t done;
 
-		while ((bg_pid = waitpid(-1, &bg_status, WNOHANG)) > 0)
-		{
-			printf("Shell: Background process %d finished", bg_pid);
+        while ((done = waitpid(-1, &status, WNOHANG)) > 0)
+        {
+            printf("Shell: Background process finished\n");
 
-			if (WIFEXITED(bg_status))
-				printf(" with exit code %d", WEXITSTATUS(bg_status));
-
-			printf("\n");
-		}
+            for (i = 0; i < bg_count; i++)
+            {
+                if (bg_pids[i] == done)
+                {
+                    bg_pids[i] = bg_pids[bg_count - 1];
+                    bg_count--;
+                    break;
+                }
+            }
+        }
 
 		/* BEGIN: TAKING INPUT */
 		bzero(line, sizeof(line));
@@ -107,6 +115,22 @@ int main(int argc, char* argv[]) {
 			continue;
 		}
 
+		if (strcmp(tokens[0], "exit") == 0)
+        {
+            /* kill all background processes */
+            for (i = 0; i < bg_count; i++)
+            {
+                kill(bg_pids[i], SIGKILL);
+            }
+
+            /* reap all children */
+            while (waitpid(-1, NULL, 0) > 0)
+                ;
+
+            free(tokens);
+            break;
+        }
+
 		int bg = 0;
 
 		/* find last token */
@@ -145,6 +169,9 @@ int main(int argc, char* argv[]) {
 				if (WIFEXITED(status))
 					printf("EXITSTATUS: %d\n", WEXITSTATUS(status));
 
+			}else{
+				if (bg_count < MAX_BG_PROCS)
+                    bg_pids[bg_count++] = pid;
 			}
         }
 
