@@ -48,6 +48,19 @@ int main(int argc, char* argv[]) {
 
 
 	while(1) {			
+		pid_t bg_pid;
+		int bg_status;
+
+		while ((bg_pid = waitpid(-1, &bg_status, WNOHANG)) > 0)
+		{
+			printf("Shell: Background process %d finished", bg_pid);
+
+			if (WIFEXITED(bg_status))
+				printf(" with exit code %d", WEXITSTATUS(bg_status));
+
+			printf("\n");
+		}
+
 		/* BEGIN: TAKING INPUT */
 		bzero(line, sizeof(line));
 
@@ -93,6 +106,18 @@ int main(int argc, char* argv[]) {
 			free(tokens);
 			continue;
 		}
+
+		int bg = 0;
+
+		/* find last token */
+		for (i = 0; tokens[i] != NULL; i++);
+
+		if (i > 0 && strcmp(tokens[i - 1], "&") == 0)
+		{
+			bg = 1;
+			free(tokens[i - 1]);
+			tokens[i - 1] = NULL;
+		}
 		
 		pid_t pid = fork();
 
@@ -110,15 +135,16 @@ int main(int argc, char* argv[]) {
             exit(1);
         }
         else
-        {
-            /* Parent process waits */
-            int status;
+        {	
+			if(bg==0){
+				/* Parent process waits */
+				int status;
 
-			waitpid(pid, &status, 0);
+				waitpid(pid, &status, 0);
 
-			if (WIFEXITED(status))
-			{
-				printf("EXITSTATUS: %d\n", WEXITSTATUS(status));
+				if (WIFEXITED(status))
+					printf("EXITSTATUS: %d\n", WEXITSTATUS(status));
+
 			}
         }
 
