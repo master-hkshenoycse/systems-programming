@@ -112,7 +112,14 @@ int main(int argc, char* argv[]) {
         else
         {
             /* Parent process waits */
-            waitpid(pid, NULL, 0);
+            int status;
+
+			waitpid(pid, &status, 0);
+
+			if (WIFEXITED(status))
+			{
+				printf("EXITSTATUS: %d\n", WEXITSTATUS(status));
+			}
         }
 
 		for(i=0;tokens[i]!=NULL;i++){
