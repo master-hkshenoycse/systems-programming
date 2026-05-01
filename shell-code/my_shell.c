@@ -1,75 +1,114 @@
-#include <signal.h>
 #include <stdio.h>
-#include <sys/types.h>
-#include <sys/wait.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #define MAX_INPUT_SIZE 1024
 #define MAX_TOKEN_SIZE 64
 #define MAX_NUM_TOKENS 64
 #define MAX_BG_PROCS 64
-volatile sig_atomic_t fg_pid = -1;
-/* Splits the string by space and returns the array of tokens
-*
-*/
+#define MAX_CMDS 64
 
+volatile sig_atomic_t fg_pids[MAX_CMDS];
+volatile sig_atomic_t fg_count = 0;
+
+/* ---------------- SIGINT HANDLER ---------------- */
 void sigint_handler(int signo)
 {
-    if (fg_pid > 0)
+    for (int i = 0; i < fg_count; i++)
     {
-        kill(fg_pid, SIGINT);
+        if (fg_pids[i] > 0)
+            kill(fg_pids[i], SIGINT);
     }
+    write(STDOUT_FILENO, "\n", 1);
 }
 
+/* ---------------- TOKENIZER ---------------- */
 char **tokenize(char *line)
 {
-  char **tokens = (char **)malloc(MAX_NUM_TOKENS * sizeof(char *));
-  char *token = (char *)malloc(MAX_TOKEN_SIZE * sizeof(char));
-  int i, tokenIndex = 0, tokenNo = 0;
+    char **tokens = malloc(MAX_NUM_TOKENS * sizeof(char *));
+    char *token = malloc(MAX_TOKEN_SIZE);
 
-  for(i =0; i < strlen(line); i++){
+    int i, tokenIndex = 0, tokenNo = 0;
 
-    char readChar = line[i];
+    for (i = 0; i < strlen(line); i++)
+    {
+        char c = line[i];
 
-    if (readChar == ' ' || readChar == '\n' || readChar == '\t'){
-      token[tokenIndex] = '\0';
-      if (tokenIndex != 0){
-	tokens[tokenNo] = (char*)malloc(MAX_TOKEN_SIZE*sizeof(char));
-	strcpy(tokens[tokenNo++], token);
-	tokenIndex = 0; 
-      }
-    } else {
-      token[tokenIndex++] = readChar;
+        if (c == ' ' || c == '\n' || c == '\t')
+        {
+            token[tokenIndex] = '\0';
+            if (tokenIndex != 0)
+            {
+                tokens[tokenNo] = malloc(MAX_TOKEN_SIZE);
+                strcpy(tokens[tokenNo++], token);
+                tokenIndex = 0;
+            }
+        }
+        else
+        {
+            token[tokenIndex++] = c;
+        }
     }
-  }
- 
-  free(token);
-  tokens[tokenNo] = NULL ;
-  return tokens;
+
+    free(token);
+    tokens[tokenNo] = NULL;
+    return tokens;
 }
 
+void free_tokens(char **tokens)
+{
+    for (int i = 0; tokens[i] != NULL; i++)
+        free(tokens[i]);
+    free(tokens);
+}
 
-int main(int argc, char* argv[]) {
-	char  line[MAX_INPUT_SIZE];
-	char cwd[256];
-	pid_t bg_pids[MAX_BG_PROCS];
+/* ---------------- SPLIT COMMANDS ---------------- */
+char ***split_commands(char *line, int *count, int mode)
+{
+    char ***cmds = malloc(MAX_CMDS * sizeof(char **));
+    char *token;
+    int i = 0;
+
+    char *delim = (mode == 1) ? "&&" : "&&&";
+
+    token = strtok(line, delim);
+
+    while (token != NULL)
+    {
+        cmds[i++] = tokenize(token);
+        token = strtok(NULL, delim);
+    }
+
+    cmds[i] = NULL;
+    *count = i;
+    return cmds;
+}
+
+/* ---------------- MAIN ---------------- */
+int main()
+{
+    char line[MAX_INPUT_SIZE];
+    char cwd[256];
+
+    pid_t bg_pids[MAX_BG_PROCS];
     int bg_count = 0;
-	char  **tokens;              
-	int i;
 
-	signal(SIGINT, sigint_handler);
+    signal(SIGINT, sigint_handler);
 
-	while(1) {			
-		int status;
+    while (1)
+    {
+        /* reap background */
+        int status;
         pid_t done;
-
         while ((done = waitpid(-1, &status, WNOHANG)) > 0)
         {
             printf("Shell: Background process finished\n");
 
-            for (i = 0; i < bg_count; i++)
+            for (int i = 0; i < bg_count; i++)
             {
                 if (bg_pids[i] == done)
                 {
@@ -80,132 +119,210 @@ int main(int argc, char* argv[]) {
             }
         }
 
-		/* BEGIN: TAKING INPUT */
-		bzero(line, sizeof(line));
+        /* prompt */
+        if (getcwd(cwd, sizeof(cwd)) != NULL)
+            printf("%s $ ", cwd);
+        else
+            printf("$ ");
 
-		if (getcwd(cwd, sizeof(cwd)) != NULL)
-			printf("%s $ ", cwd);
-		else
-			printf("$ ");
+        fflush(stdout);
 
-		scanf("%[^\n]", line);
-		getchar();
+        if (fgets(line, sizeof(line), stdin) == NULL)
+            break;
 
-		printf("Command entered: %s (remove this debug output later)\n", line);
-		/* END: TAKING INPUT */
+        /* detect mode */
+        int mode = 0;
+        if (strstr(line, "&&&"))
+            mode = 2;
+        else if (strstr(line, "&&"))
+            mode = 1;
 
-		line[strlen(line)] = '\n'; //terminate with new line
-		tokens = tokenize(line);
+        char ***commands;
+        int cmd_count = 0;
 
-		if (tokens[0] == NULL)
+        if (mode == 0)
         {
-            free(tokens);
-            continue;
+            commands = malloc(sizeof(char **));
+            commands[0] = tokenize(line);
+            commands[1] = NULL;
+            cmd_count = 1;
+        }
+        else
+        {
+            commands = split_commands(line, &cmd_count, mode);
         }
 
-		/* ---------------- BUILT-IN: cd ---------------- */
-		if (strcmp(tokens[0], "cd") == 0)
-		{
-			/* cd requires exactly one argument */
-			if (tokens[1] == NULL || tokens[2] != NULL)
-			{
-				printf("cd: invalid usage\n");
-			}
-			else
-			{
-				if (chdir(tokens[1]) != 0)
-				{
-					perror("cd failed");
-				}
-			}
-
-			for (i = 0; tokens[i] != NULL; i++)
-				free(tokens[i]);
-
-			free(tokens);
-			continue;
-		}
-
-		if (strcmp(tokens[0], "exit") == 0)
+        /* handle exit */
+        if (commands[0][0] && strcmp(commands[0][0], "exit") == 0)
         {
-            /* kill all background processes */
-            for (i = 0; i < bg_count; i++)
-            {
+            for (int i = 0; i < bg_count; i++)
                 kill(bg_pids[i], SIGKILL);
-            }
 
-            /* reap all children */
             while (waitpid(-1, NULL, 0) > 0)
                 ;
 
-            free(tokens);
+            for (int i = 0; i < cmd_count; i++)
+                free_tokens(commands[i]);
+            free(commands);
             break;
         }
 
-		int bg = 0;
-
-		/* find last token */
-		for (i = 0; tokens[i] != NULL; i++);
-
-		if (i > 0 && strcmp(tokens[i - 1], "&") == 0)
-		{
-			bg = 1;
-			free(tokens[i - 1]);
-			tokens[i - 1] = NULL;
-		}
-
-		pid_t pid = fork();
-
-        if (pid < 0)
+        /* SERIAL */
+        if (mode == 1)
         {
-            perror("fork failed");
-        }
-        else if (pid == 0)
-        {
-
-			if (bg)
+            for (int c = 0; c < cmd_count; c++)
             {
-                setpgid(0, 0);
+                if (commands[c][0] == NULL)
+                    continue;
+
+                if (strcmp(commands[c][0], "cd") == 0)
+                {
+                    if (commands[c][1] == NULL || commands[c][2] != NULL)
+                        printf("cd: invalid usage\n");
+                    else if (chdir(commands[c][1]) != 0)
+                        perror("cd failed");
+                    continue;
+                }
+
+                pid_t pid = fork();
+
+                if (pid == 0)
+                {
+                    execvp(commands[c][0], commands[c]);
+                    perror("exec failed");
+                    exit(1);
+                }
+                else
+                {
+                    fg_pids[0] = pid;
+                    fg_count = 1;
+
+                    int status;
+                    waitpid(pid, &status, 0);
+
+                    fg_count = 0;
+
+                    if (WIFEXITED(status))
+                        printf("EXITSTATUS: %d\n", WEXITSTATUS(status));
+                }
+            }
+        }
+
+        /* PARALLEL */
+        else if (mode == 2)
+        {
+            pid_t pids[MAX_CMDS];
+
+            for (int c = 0; c < cmd_count; c++)
+            {
+                if (commands[c][0] == NULL)
+                    continue;
+
+                pid_t pid = fork();
+
+                if (pid == 0)
+                {
+                    execvp(commands[c][0], commands[c]);
+                    perror("exec failed");
+                    exit(1);
+                }
+                else
+                {
+                    pids[c] = pid;
+                }
             }
 
-            /* Child process */
-            execvp(tokens[0], tokens);
+            fg_count = cmd_count;
+            for (int i = 0; i < cmd_count; i++)
+                fg_pids[i] = pids[i];
 
-            /* If execvp returns, command failed */
-            perror("exec failed");
-            exit(1);
+            for (int c = 0; c < cmd_count; c++)
+            {
+                int status;
+                waitpid(pids[c], &status, 0);
+
+                if (WIFEXITED(status))
+                    printf("EXITSTATUS: %d\n", WEXITSTATUS(status));
+            }
+
+            fg_count = 0;
         }
+
+        /* SINGLE COMMAND */
         else
-        {	
-			if(bg==0){
-				/* Parent process waits */
-				int status;
-				fg_pid = pid;
+        {
+            char **tokens = commands[0];
 
-				waitpid(pid, &status, 0);
+            if (tokens[0] == NULL)
+            {
+                free_tokens(tokens);
+                free(commands);
+                continue;
+            }
 
-				fg_pid = -1;
+            if (strcmp(tokens[0], "cd") == 0)
+            {
+                if (tokens[1] == NULL || tokens[2] != NULL)
+                    printf("cd: invalid usage\n");
+                else if (chdir(tokens[1]) != 0)
+                    perror("cd failed");
 
-				if (WIFEXITED(status))
-					printf("EXITSTATUS: %d\n", WEXITSTATUS(status));
+                free_tokens(tokens);
+                free(commands);
+                continue;
+            }
 
-			}else{
-				setpgid(0, 0);
-				if (bg_count < MAX_BG_PROCS)
+            int bg = 0;
+            int i;
+            for (i = 0; tokens[i] != NULL; i++)
+                ;
+
+            if (i > 0 && strcmp(tokens[i - 1], "&") == 0)
+            {
+                bg = 1;
+                free(tokens[i - 1]);
+                tokens[i - 1] = NULL;
+            }
+
+            pid_t pid = fork();
+
+            if (pid == 0)
+            {
+                if (bg)
+                    setpgid(0, 0);
+
+                execvp(tokens[0], tokens);
+                perror("exec failed");
+                exit(1);
+            }
+            else
+            {
+                if (bg)
+                {
                     bg_pids[bg_count++] = pid;
-			}
+                }
+                else
+                {
+                    fg_pids[0] = pid;
+                    fg_count = 1;
+
+                    int status;
+                    waitpid(pid, &status, 0);
+
+                    fg_count = 0;
+
+                    if (WIFEXITED(status))
+                        printf("EXITSTATUS: %d\n", WEXITSTATUS(status));
+                }
+            }
         }
 
-		for(i=0;tokens[i]!=NULL;i++){
-			printf("found token %s (remove this debug output later)\n", tokens[i]);
-		}
-       
-		// Freeing the allocated memory	
-		for(i=0;tokens[i]!=NULL;i++){
-			free(tokens[i]);
-		}
-		free(tokens);
+        /* free */
+        for (int i = 0; i < cmd_count; i++)
+            free_tokens(commands[i]);
 
-	}
-	return 0;
+        free(commands);
+    }
+
+    return 0;
 }
