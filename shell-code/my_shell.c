@@ -1,3 +1,4 @@
+#include <signal.h>
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -9,10 +10,19 @@
 #define MAX_TOKEN_SIZE 64
 #define MAX_NUM_TOKENS 64
 #define MAX_BG_PROCS 64
-
+volatile sig_atomic_t fg_pid = -1;
 /* Splits the string by space and returns the array of tokens
 *
 */
+
+void sigint_handler(int signo)
+{
+    if (fg_pid > 0)
+    {
+        kill(fg_pid, SIGINT);
+    }
+}
+
 char **tokenize(char *line)
 {
   char **tokens = (char **)malloc(MAX_NUM_TOKENS * sizeof(char *));
@@ -49,6 +59,7 @@ int main(int argc, char* argv[]) {
 	char  **tokens;              
 	int i;
 
+	signal(SIGINT, sigint_handler);
 
 	while(1) {			
 		int status;
@@ -142,7 +153,7 @@ int main(int argc, char* argv[]) {
 			free(tokens[i - 1]);
 			tokens[i - 1] = NULL;
 		}
-		
+
 		pid_t pid = fork();
 
         if (pid < 0)
@@ -151,6 +162,12 @@ int main(int argc, char* argv[]) {
         }
         else if (pid == 0)
         {
+
+			if (bg)
+            {
+                setpgid(0, 0);
+            }
+
             /* Child process */
             execvp(tokens[0], tokens);
 
@@ -163,13 +180,17 @@ int main(int argc, char* argv[]) {
 			if(bg==0){
 				/* Parent process waits */
 				int status;
+				fg_pid = pid;
 
 				waitpid(pid, &status, 0);
+
+				fg_pid = -1;
 
 				if (WIFEXITED(status))
 					printf("EXITSTATUS: %d\n", WEXITSTATUS(status));
 
 			}else{
+				setpgid(0, 0);
 				if (bg_count < MAX_BG_PROCS)
                     bg_pids[bg_count++] = pid;
 			}
