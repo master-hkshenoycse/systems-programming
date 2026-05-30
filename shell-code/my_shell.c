@@ -88,6 +88,128 @@ char ***split_commands(char *line, int *count, int mode)
     return cmds;
 }
 
+void execute_pipe(char *line)
+{
+    char *left;
+    char *right;
+
+    char *args1[MAX_NUM_TOKENS];
+    char *args2[MAX_NUM_TOKENS];
+
+    int fd[2];
+
+    pid_t pid1, pid2;
+
+    /* Split command around pipe */
+
+    left = strtok(line, "|");
+    right = strtok(NULL, "|");
+
+    if (left == NULL || right == NULL)
+    {
+        printf("Invalid pipe command\n");
+        return;
+    }
+
+    /* Tokenize left command */
+
+    int i = 0;
+    char *token = strtok(left, " \n\t");
+
+    while (token != NULL)
+    {
+        args1[i++] = token;
+        token = strtok(NULL, " \n\t");
+    }
+
+    args1[i] = NULL;
+
+    /* Tokenize right command */
+
+    i = 0;
+    token = strtok(right, " \n\t");
+
+    while (token != NULL)
+    {
+        args2[i++] = token;
+        token = strtok(NULL, " \n\t");
+    }
+
+    args2[i] = NULL;
+
+    /* Create pipe */
+
+    if (pipe(fd) < 0)
+    {
+        perror("pipe failed");
+        return;
+    }
+
+    /* First child */
+
+    pid1 = fork();
+
+    if (pid1 < 0)
+    {
+        perror("fork failed");
+        return;
+    }
+
+    if (pid1 == 0)
+    {
+        /* stdout -> pipe write */
+
+        dup2(fd[1], STDOUT_FILENO);
+
+        close(fd[0]);
+        close(fd[1]);
+
+        execvp(args1[0], args1);
+
+        perror("exec failed");
+        exit(1);
+    }
+
+    /* Second child */
+
+    pid2 = fork();
+
+    if (pid2 < 0)
+    {
+        perror("fork failed");
+        return;
+    }
+
+    if (pid2 == 0)
+    {
+        /* stdin <- pipe read */
+
+        dup2(fd[0], STDIN_FILENO);
+
+        close(fd[1]);
+        close(fd[0]);
+
+        execvp(args2[0], args2);
+
+        perror("exec failed");
+        exit(1);
+    }
+
+    /* Parent closes both */
+
+    close(fd[0]);
+    close(fd[1]);
+
+    fg_pids[0] = pid1;
+    fg_pids[1] = pid2;
+    fg_count = 2;
+
+    waitpid(pid1, NULL, 0);
+    waitpid(pid2, NULL, 0);
+
+    fg_count = 0;
+}
+
 /* ---------------- MAIN ---------------- */
 int main()
 {
@@ -130,6 +252,13 @@ int main()
         if (fgets(line, sizeof(line), stdin) == NULL)
             break;
 
+        /* PIPE SUPPORT */
+
+        if (strchr(line, '|') != NULL)
+        {
+            execute_pipe(line);
+            continue;
+        }
         /* detect mode */
         int mode = 0;
         if (strstr(line, "&&&"))
